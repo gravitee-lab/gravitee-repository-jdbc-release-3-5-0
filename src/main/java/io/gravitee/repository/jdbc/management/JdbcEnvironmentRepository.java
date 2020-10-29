@@ -16,11 +16,9 @@
 package io.gravitee.repository.jdbc.management;
 
 import java.sql.Types;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 
+import io.gravitee.repository.management.model.Organization;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
@@ -55,27 +53,22 @@ public class JdbcEnvironmentRepository extends JdbcAbstractCrudRepository<Enviro
         return item.getId();
     }
 
-    
     @Override
     public Optional<Environment> findById(String id) throws TechnicalException {
         Optional<Environment> findById = super.findById(id);
-        if(findById.isPresent()) {
-            addDomainRestrictions(findById.get());
+        if (findById.isPresent()) {
+            final Environment environment = findById.get();
+            addDomainRestrictions(environment);
+            addHrids(environment);
         }
         return findById;
-    }
-
-    @Override
-    public Set<Environment> findAll() throws TechnicalException {
-        Set<Environment> findAll = super.findAll();
-        findAll.forEach(this::addDomainRestrictions);
-        return findAll;
     }
 
     @Override
     public Environment create(Environment item) throws TechnicalException {
         super.create(item);
         storeDomainRestrictions(item, false);
+        storeHrids(item, false);
         return findById(item.getId()).orElse(null);
     }
 
@@ -83,12 +76,14 @@ public class JdbcEnvironmentRepository extends JdbcAbstractCrudRepository<Enviro
     public Environment update(Environment item) throws TechnicalException {
         super.update(item);
         storeDomainRestrictions(item, true);
+        storeHrids(item, true);
         return findById(item.getId()).orElse(null);
     }
 
     @Override
     public void delete(String id) throws TechnicalException {
         jdbcTemplate.update("delete from environment_domain_restrictions where environment_id = ?", id);
+        jdbcTemplate.update("delete from environment_hrids where environment_id = ?", id);
         super.delete(id);
     }
 
@@ -96,7 +91,12 @@ public class JdbcEnvironmentRepository extends JdbcAbstractCrudRepository<Enviro
         List<String> domainRestrictions = jdbcTemplate.queryForList("select domain_restriction from environment_domain_restrictions where environment_id = ?", String.class, parent.getId());
         parent.setDomainRestrictions(domainRestrictions);
     }
-    
+
+    private void addHrids(Environment environment) {
+        List<String> hrids = jdbcTemplate.queryForList("select hrid from environment_hrids where environment_id = ? order by pos", String.class, environment.getId());
+        environment.setHrids(hrids);
+    }
+
     private void storeDomainRestrictions(Environment environment, boolean deleteFirst) {
         if (deleteFirst) {
             jdbcTemplate.update("delete from environment_domain_restrictions where environment_id = ?", environment.getId());
@@ -107,6 +107,23 @@ public class JdbcEnvironmentRepository extends JdbcAbstractCrudRepository<Enviro
                     , ORM.getBatchStringSetter(environment.getId(), filteredDomainRestrictions));
         }
     }
+
+    private void storeHrids(Environment environment, boolean deleteFirst) {
+        if (deleteFirst) {
+            jdbcTemplate.update("delete from environment_hrids where environment_id = ?", environment.getId());
+        }
+        List<String> hrids = ORM.filterStrings(environment.getHrids());
+        if (!hrids.isEmpty()) {
+            final List<Object[]> params = new ArrayList<>(hrids.size());
+
+            for (int i = 0; i < hrids.size(); i++) {
+                params.add(new Object[]{environment.getId(), hrids.get(i), i});
+            }
+
+            jdbcTemplate.batchUpdate("insert into environment_hrids (environment_id, hrid, pos) values ( ?, ?, ? )", params);
+        }
+    }
+
     @Override
     public Set<Environment> findByOrganization(String organizationId) throws TechnicalException {
         LOGGER.debug("JdbcEnvironmentRepository.findByOrganization({})", organizationId);
@@ -120,6 +137,6 @@ public class JdbcEnvironmentRepository extends JdbcAbstractCrudRepository<Enviro
             LOGGER.error("Failed to find environments by organization:", ex);
             throw new TechnicalException("Failed to find environments by organization", ex);
         }
-    }    
+    }
 
 }
